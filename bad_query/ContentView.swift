@@ -333,10 +333,18 @@ struct ContentView: View {
 
         appendLog("\nstaging export for:\n\(url.path)")
 
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                UUID().uuidString + "-" + url.lastPathComponent
-            )
+        let baseName = url.lastPathComponent
+        var stagedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(baseName)
+        var counter = 1
+
+        while FileManager.default.fileExists(
+            atPath: stagedURL.path
+        ) {
+            stagedURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(counter)-\(baseName)")
+            counter += 1
+        }
 
         let accessed = url.startAccessingSecurityScopedResource()
 
@@ -347,7 +355,7 @@ struct ContentView: View {
         }
 
         do {
-            try FileManager.default.copyItem(at: url, to: tempURL)
+            try stageItem(url, to: stagedURL)
         } catch {
             appendLog(
                 "\nfailed to stage export item:\n\(error.localizedDescription)"
@@ -355,8 +363,63 @@ struct ContentView: View {
             return nil
         }
 
-        appendLog("\nstaged export item:\n\(tempURL.path)")
-        return tempURL
+        var isDirectory: ObjCBool = false
+        _ = FileManager.default.fileExists(
+            atPath: stagedURL.path,
+            isDirectory: &isDirectory
+        )
+
+        if isDirectory.boolValue {
+            appendLog(
+                "\nstaged directory: \(stagedURL.lastPathComponent)"
+            )
+        } else if
+            let attributes = try? FileManager.default
+                .attributesOfItem(atPath: stagedURL.path),
+            let size = attributes[.size] as? NSNumber
+        {
+            appendLog(
+                "\nstaged file: \(stagedURL.lastPathComponent) (\(size.intValue) bytes)"
+            )
+        }
+
+        return stagedURL
+    }
+
+    private func stageItem(_ source: URL, to destination: URL) throws {
+        var isDirectory: ObjCBool = false
+
+        guard FileManager.default.fileExists(
+            atPath: source.path,
+            isDirectory: &isDirectory
+        ) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+
+        if isDirectory.boolValue {
+            try FileManager.default.createDirectory(
+                at: destination,
+                withIntermediateDirectories: true
+            )
+
+            let contents = try FileManager.default
+                .contentsOfDirectory(
+                    at: source,
+                    includingPropertiesForKeys: nil
+                )
+
+            for child in contents {
+                try stageItem(
+                    child,
+                    to: destination.appendingPathComponent(
+                        child.lastPathComponent
+                    )
+                )
+            }
+        } else {
+            let data = try Data(contentsOf: source)
+            try data.write(to: destination, options: .atomic)
+        }
     }
 
     private func topViewController() -> UIViewController? {
