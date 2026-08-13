@@ -9,6 +9,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    @State private var sandboxHandle: Int64 = -99
     @State private var showingImporter = false
     @State private var showingDeleteConfirmation = false
     
@@ -55,6 +56,17 @@ struct ContentView: View {
                             systemImage: "folder.badge.plus"
                         )
                     }
+                    
+                    Button("Consume Sandbox Extension") {
+                        sandboxHandle = consumeExtension(path)
+                    }
+                    .disabled(path.isEmpty || sandboxHandle > 0)
+                    
+                    Button("Release Sandbox Extension") {
+                        releaseExtension(handle: sandboxHandle)
+                        sandboxHandle = -99
+                    }
+                    .disabled(sandboxHandle < 0)
 
                     Button {
                         showCurrentDirectory()
@@ -110,32 +122,6 @@ struct ContentView: View {
                         )
                     }
                     .disabled(selectedURL == nil)
-                }
-
-                Section("Directory") {
-                    if let currentDirectoryURL {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Current Directory")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Text(currentDirectoryURL.path)
-                                .font(.system(.footnote, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                    } else {
-                        Text("No directory selected")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button {
-                        showingImporter = true
-                    } label: {
-                        Label(
-                            "Select Directory",
-                            systemImage: "folder"
-                        )
-                    }
                 }
 
                 Section("Log") {
