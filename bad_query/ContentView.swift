@@ -3,6 +3,7 @@
 //  bad_query
 //
 //  Created by Taj C on 7/21/26.
+//  Edited by Bennebotix on 8/13/26.
 //
 
 import SwiftUI
@@ -74,7 +75,10 @@ struct ContentView: View {
                             selectedURL?.path ?? defaultPath
                         )
                     }
-                    .disabled(selectedURL?.path.isEmpty ?? true)
+                    .disabled(
+                        (selectedURL?.path.isEmpty ?? true) ||
+                        sandboxHandles[selectedURL?.path ?? defaultPath] != nil
+                    )
 
                     Button("Release Sandbox Extension") {
                         releaseAllExtensions()
@@ -108,7 +112,6 @@ struct ContentView: View {
                             appendLog(
                                 "\nopening export for:\n\(selectedURL.path)"
                             )
-                            _ = ensureExtension(for: selectedURL.path)
                             presentExportSheet(for: selectedURL)
                         } label: {
                             Label(
@@ -282,13 +285,30 @@ struct ContentView: View {
             return
         }
 
+        let item: Any
+        var stagedURL: URL?
+
+        if url.hasDirectoryPath {
+            item = url
+        } else {
+            guard let tempURL = stageFileForExport(url) else {
+                return
+            }
+            stagedURL = tempURL
+            item = tempURL
+        }
+
         let activityVC = UIActivityViewController(
-            activityItems: [url],
+            activityItems: [item],
             applicationActivities: nil
         )
 
         activityVC.completionWithItemsHandler = {
             _, completed, _, error in
+            if let stagedURL {
+                try? FileManager.default.removeItem(at: stagedURL)
+            }
+
             if let error {
                 appendLog(
                     "\nexport failed: \(error.localizedDescription)"
@@ -312,6 +332,40 @@ struct ContentView: View {
         }
 
         presenter.present(activityVC, animated: true)
+    }
+
+    private func stageFileForExport(_ url: URL) -> URL? {
+        guard ensureExtension(for: url.path) else {
+            appendLog(
+                "\nexport aborted: no sandbox extension for:\n\(url.path)"
+            )
+            return nil
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                UUID().uuidString + "-" + url.lastPathComponent
+            )
+
+        let accessed = url.startAccessingSecurityScopedResource()
+
+        defer {
+            if accessed {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            try FileManager.default.copyItem(at: url, to: tempURL)
+        } catch {
+            appendLog(
+                "\nfailed to stage export file:\n\(error.localizedDescription)"
+            )
+            return nil
+        }
+
+        appendLog("\nstaged export file:\n\(tempURL.path)")
+        return tempURL
     }
 
     private func topViewController() -> UIViewController? {
