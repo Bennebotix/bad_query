@@ -58,9 +58,9 @@ struct ContentView: View {
                     }
                     
                     Button("Consume Sandbox Extension") {
-                        sandboxHandle = consumeExtension(path)
+                        sandboxHandle = consumeExtension(selectedURL?.path ?? defaultPath)
                     }
-                    .disabled(path.isEmpty || sandboxHandle > 0)
+                    .disabled(selectedURL?.path.isEmpty || sandboxHandle > 0)
                     
                     Button("Release Sandbox Extension") {
                         releaseExtension(handle: sandboxHandle)
