@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var sandboxHandle: Int64 = -99
     @State private var showingImporter = false
     @State private var showingDeleteConfirmation = false
-    
+
     private let defaultPath = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist"
 
     @State private var selectedURL: URL?
@@ -56,12 +56,17 @@ struct ContentView: View {
                             systemImage: "folder.badge.plus"
                         )
                     }
-                    
+
                     Button("Consume Sandbox Extension") {
-                        sandboxHandle = consumeExtension(selectedURL?.path ?? defaultPath)
+                        sandboxHandle = consumeExtension(
+                            selectedURL?.path ?? defaultPath
+                        )
                     }
-                    .disabled(selectedURL?.path.isEmpty || sandboxHandle > 0)
-                    
+                    .disabled(
+                        (selectedURL?.path.isEmpty ?? true) ||
+                        sandboxHandle > 0
+                    )
+
                     Button("Release Sandbox Extension") {
                         releaseExtension(handle: sandboxHandle)
                         sandboxHandle = -99
@@ -96,6 +101,20 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         }
+                    }
+                }
+
+                Section("Export") {
+                    if let selectedURL {
+                        ShareLink(item: selectedURL) {
+                            Label(
+                                "Export At Path",
+                                systemImage: "square.and.arrow.up"
+                            )
+                        }
+                    } else {
+                        Text("Select an item to export")
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -173,6 +192,43 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private func consumeExtension(_ path: String) -> Int64 {
+        if sandboxHandle > 0 {
+            appendLog("\nalready consumed sandbox token!")
+            return sandboxHandle
+        }
+
+        var pathC = path.utf8CString.map { Int8($0) }
+
+        appendLog("\nattempting consume sandbox extension...")
+        let handle = bad_query(&pathC, false, nil, false)
+
+        switch handle {
+        case -1:
+            appendLog("\nfailed to resolve one or more functions")
+        case -2:
+            appendLog("\nfailed to create sandbox query")
+        case -3:
+            appendLog("\noutside of containermanager's sandbox")
+        case -4:
+            appendLog("\nkernel rejected sandbox query")
+        default:
+            appendLog("\nsuccess! handle: \(handle)")
+        }
+
+        return handle
+    }
+
+    private func releaseExtension(handle: Int64) {
+        if handle < 0 {
+            appendLog("\nsandbox extension hasn't been consumed!")
+            return
+        }
+
+        bad_query_release(handle)
+        appendLog("\nreleased sandbox extension!")
     }
 
     private func handleImportedItem(
