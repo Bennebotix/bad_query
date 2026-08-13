@@ -123,7 +123,7 @@ struct ContentView: View {
                     }
 
                     Button {
-                        selectDirectory()
+                        showingImporter = true
                     } label: {
                         Label(
                             "Select Directory",
@@ -222,6 +222,8 @@ struct ContentView: View {
                 )
             }
 
+            url.stopAccessingSecurityScopedResource()
+
         case .failure(let error):
             appendLog(
                 "\nimport failed: \(error.localizedDescription)"
@@ -229,26 +231,18 @@ struct ContentView: View {
         }
     }
 
-    private func selectDirectory() {
-        showingImporter = true
-
-        appendLog(
-            "\nuse Select File or Folder and choose the directory"
-        )
-    }
-
     private func showCurrentDirectory() {
-        guard let selectedURL else {
+        guard let url = selectedURL else {
             appendLog("\nno selected item")
             return
         }
 
         let directoryURL: URL
 
-        if selectedURL.hasDirectoryPath {
-            directoryURL = selectedURL
+        if url.hasDirectoryPath {
+            directoryURL = url
         } else {
-            directoryURL = selectedURL.deletingLastPathComponent()
+            directoryURL = url.deletingLastPathComponent()
         }
 
         currentDirectoryURL = directoryURL
@@ -269,19 +263,19 @@ struct ContentView: View {
             return
         }
 
-        let accessedSource =
+        let sourceAccessed =
             sourceURL.startAccessingSecurityScopedResource()
 
-        let accessedDestination =
+        let destinationAccessed =
             destinationDirectory
                 .startAccessingSecurityScopedResource()
 
         defer {
-            if accessedSource {
+            if sourceAccessed {
                 sourceURL.stopAccessingSecurityScopedResource()
             }
 
-            if accessedDestination {
+            if destinationAccessed {
                 destinationDirectory
                     .stopAccessingSecurityScopedResource()
             }
@@ -300,7 +294,7 @@ struct ContentView: View {
                 )
 
                 appendLog(
-                    "\noverwrote existing item:\n\(destinationURL.path)"
+                    "\nremoved existing destination:\n\(destinationURL.path)"
                 )
             }
 
@@ -320,34 +314,38 @@ struct ContentView: View {
     }
 
     private func deleteSelectedItem() {
-        guard let selectedURL else {
+        guard let url = selectedURL else {
             appendLog("\nno item selected")
             return
         }
 
         let accessed =
-            selectedURL.startAccessingSecurityScopedResource()
+            url.startAccessingSecurityScopedResource()
 
         defer {
             if accessed {
-                selectedURL.stopAccessingSecurityScopedResource()
+                url.stopAccessingSecurityScopedResource()
             }
         }
 
         do {
+            let parentDirectory =
+                url.deletingLastPathComponent()
+
             try FileManager.default.removeItem(
-                at: selectedURL
+                at: url
             )
 
             appendLog(
-                "\ndeleted:\n\(selectedURL.path)"
+                "\ndeleted:\n\(url.path)"
             )
-
-            let parentDirectory =
-                selectedURL.deletingLastPathComponent()
 
             selectedURL = parentDirectory
             currentDirectoryURL = parentDirectory
+
+            appendLog(
+                "\ncurrent directory:\n\(parentDirectory.path)"
+            )
         } catch {
             appendLog(
                 "\ndelete failed:\n\(error.localizedDescription)"
