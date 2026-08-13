@@ -11,11 +11,22 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @State private var showingImporter = false
     @State private var showingDeleteConfirmation = false
+    
+    private let defaultPath = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist"
 
     @State private var selectedURL: URL?
     @State private var currentDirectoryURL: URL?
 
     @State private var log = "file manager ready"
+
+    init() {
+        let defaultURL = URL(fileURLWithPath: defaultPath)
+
+        _selectedURL = State(initialValue: defaultURL)
+        _currentDirectoryURL = State(
+            initialValue: defaultURL.deletingLastPathComponent()
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -25,14 +36,9 @@ struct ContentView: View {
                         "Path",
                         text: Binding(
                             get: {
-                                selectedURL?.path ?? ""
+                                selectedURL?.path ?? defaultPath
                             },
                             set: { newValue in
-                                guard !newValue.isEmpty else {
-                                    selectedURL = nil
-                                    return
-                                }
-
                                 selectedURL = URL(fileURLWithPath: newValue)
                             }
                         )
