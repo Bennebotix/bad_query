@@ -10,7 +10,7 @@ import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var sandboxHandle: Int64 = -99
+    @State private var sandboxHandles: [String: Int64] = [:]
 
     @State private var showingItemImporter = false
     @State private var showingAddImporter = false
@@ -70,30 +70,16 @@ struct ContentView: View {
                     }
 
                     Button("Consume Sandbox Extension") {
-                        sandboxHandle = consumeExtension(
+                        _ = consumeExtension(
                             selectedURL?.path ?? defaultPath
                         )
                     }
-                    .disabled(
-                        (selectedURL?.path.isEmpty ?? true) ||
-                        sandboxHandle > 0
-                    )
+                    .disabled(selectedURL?.path.isEmpty ?? true)
 
                     Button("Release Sandbox Extension") {
-                        releaseExtension(handle: sandboxHandle)
-                        sandboxHandle = -99
+                        releaseAllExtensions()
                     }
-                    .disabled(sandboxHandle < 0)
-
-                    Button {
-                        showCurrentDirectory()
-                    } label: {
-                        Label(
-                            "Show Current Directory",
-                            systemImage: "folder"
-                        )
-                    }
-                    .disabled(selectedURL == nil)
+                    .disabled(sandboxHandles.isEmpty)
 
                     if let selectedURL {
                         VStack(alignment: .leading, spacing: 6) {
@@ -122,6 +108,7 @@ struct ContentView: View {
                             appendLog(
                                 "\nopening export for:\n\(selectedURL.path)"
                             )
+                            _ = ensureExtension(for: selectedURL.path)
                             presentExportSheet(for: selectedURL)
                         } label: {
                             Label(
@@ -218,17 +205,30 @@ struct ContentView: View {
     }
 
     private func consumeExtension(_ path: String) -> Int64 {
-        if sandboxHandle > 0 {
-            appendLog("\nalready consumed sandbox token!")
-            return sandboxHandle
+        if let existing = sandboxHandles[path] {
+            appendLog(
+                "\nalready consumed sandbox token for:\n\(path)"
+            )
+            return existing
         }
 
         var pathC = path.utf8CString.map { Int8($0) }
 
-        appendLog("\nattempting consume sandbox extension...")
-        let handle = bad_query(&pathC, false, nil, false)
+        appendLog(
+            "\nattempting consume sandbox extension for:\n\(path)"
+        )
+
+        let handle = bad_query(&pathC, true, nil, false)
 
         switch handle {
+        case -255:
+            appendLog("\nfailed: not an absolute path")
+        case -254:
+            appendLog(
+                "\nfailed: path missing or not stat-able from the app sandbox (lstat pre-check)"
+            )
+        case -5:
+            appendLog("\nfailed to build path traversal string")
         case -1:
             appendLog("\nfailed to resolve one or more functions")
         case -2:
@@ -238,20 +238,40 @@ struct ContentView: View {
         case -4:
             appendLog("\nkernel rejected sandbox query")
         default:
-            appendLog("\nsuccess! handle: \(handle)")
+            if handle > 0 {
+                sandboxHandles[path] = handle
+                appendLog("\nsuccess! handle: \(handle)")
+            } else {
+                appendLog(
+                    "\nsandbox_extension_consume failed with code: \(handle)"
+                )
+            }
         }
 
         return handle
     }
 
-    private func releaseExtension(handle: Int64) {
-        if handle < 0 {
-            appendLog("\nsandbox extension hasn't been consumed!")
+    private func releaseAllExtensions() {
+        if sandboxHandles.isEmpty {
+            appendLog("\nno sandbox extensions consumed")
             return
         }
 
-        bad_query_release(handle)
-        appendLog("\nreleased sandbox extension!")
+        for (path, handle) in sandboxHandles {
+            bad_query_release(handle)
+            appendLog(
+                "\nreleased extension (\(handle)) for:\n\(path)"
+            )
+        }
+
+        sandboxHandles.removeAll()
+        appendLog("\nreleased all sandbox extensions")
+    }
+
+    @discardableResult
+    private func ensureExtension(for path: String) -> Bool {
+        let handle = consumeExtension(path)
+        return handle > 0
     }
 
     private func presentExportSheet(for url: URL) {
@@ -413,33 +433,19 @@ struct ContentView: View {
         }
     }
 
-    private func showCurrentDirectory() {
-        guard let url = selectedURL else {
-            appendLog("\nno selected item")
-            return
-        }
-
-        let directoryURL: URL
-
-        if url.hasDirectoryPath {
-            directoryURL = url
-        } else {
-            directoryURL = url.deletingLastPathComponent()
-        }
-
-        currentDirectoryURL = directoryURL
-
-        appendLog(
-            "\ncurrent directory:\n\(directoryURL.path)"
-        )
-    }
-
     private func copyItem(
         _ sourceURL: URL,
         to destinationDirectory: URL?
     ) {
         guard let destinationDirectory else {
             appendLog("\nno destination directory selected")
+            return
+        }
+
+        guard ensureExtension(for: destinationDirectory.path) else {
+            appendLog(
+                "\ncopy aborted: no sandbox extension for destination:\n\(destinationDirectory.path)"
+            )
             return
         }
 
@@ -494,6 +500,15 @@ struct ContentView: View {
     }
 
     private func deleteItem(at url: URL) {
+        let parentDirectory = url.deletingLastPathComponent()
+
+        guard ensureExtension(for: parentDirectory.path) else {
+            appendLog(
+                "\ndelete aborted: no sandbox extension for parent:\n\(parentDirectory.path)"
+            )
+            return
+        }
+
         let accessed =
             url.startAccessingSecurityScopedResource()
 
@@ -504,9 +519,6 @@ struct ContentView: View {
         }
 
         do {
-            let parentDirectory =
-                url.deletingLastPathComponent()
-
             try FileManager.default.removeItem(
                 at: url
             )
