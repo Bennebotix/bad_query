@@ -5,131 +5,357 @@
 //  Created by Taj C on 7/21/26.
 //
 
-// This app is just a basic demo and doesn't show everything bad_query can do, I just threw it together for testing when I first figured out the exploit.
-
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var showingImporter = false
-    @State private var sandboxHandle: Int64 = -99
-    @State private var tempURL: URL?
-    @State private var log = "it's sandbox time"
-    @State private var path = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist"
-    
+    @State private var showingDeleteConfirmation = false
+
+    @State private var selectedURL: URL?
+    @State private var currentDirectoryURL: URL?
+
+    @State private var log = "file manager ready"
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("Sandbox") {
-                    TextField("Path", text: $path)
-                    
-                    Button("Consume Sandbox Extension") {
-                        sandboxHandle = consumeExtension(path)
+                Section("Selected Item") {
+                    TextField(
+                        "Path",
+                        text: Binding(
+                            get: {
+                                selectedURL?.path ?? ""
+                            },
+                            set: { newValue in
+                                guard !newValue.isEmpty else {
+                                    selectedURL = nil
+                                    return
+                                }
+
+                                selectedURL = URL(fileURLWithPath: newValue)
+                            }
+                        )
+                    )
+                    .font(.system(.body, design: .monospaced))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    Button {
+                        showingImporter = true
+                    } label: {
+                        Label(
+                            "Select File or Folder",
+                            systemImage: "folder.badge.plus"
+                        )
                     }
-                    .disabled(path.isEmpty || sandboxHandle > 0)
-                    
-                    Button("Release Sandbox Extension") {
-                        releaseExtension(handle: sandboxHandle)
-                        sandboxHandle = -99
+
+                    Button {
+                        showCurrentDirectory()
+                    } label: {
+                        Label(
+                            "Show Current Directory",
+                            systemImage: "folder"
+                        )
                     }
-                    .disabled(sandboxHandle < 0)
+                    .disabled(selectedURL == nil)
+
+                    if let selectedURL {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Selected")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Text(selectedURL.path)
+                                .font(.system(.footnote, design: .monospaced))
+                                .textSelection(.enabled)
+
+                            Text(
+                                selectedURL.hasDirectoryPath
+                                    ? "Directory"
+                                    : "File"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                
-                Section("File System") {
-                    ShareLink(item: URL(fileURLWithPath: path)) {
-                        Text("Export At Path")
+
+                Section("File Operations") {
+                    Button {
+                        copySelectedItemToCurrentDirectory()
+                    } label: {
+                        Label(
+                            "Add to Current Directory",
+                            systemImage: "arrow.down.doc"
+                        )
+                    }
+                    .disabled(
+                        selectedURL == nil ||
+                        currentDirectoryURL == nil
+                    )
+
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label(
+                            "Delete Selected Item",
+                            systemImage: "trash"
+                        )
+                    }
+                    .disabled(selectedURL == nil)
+                }
+
+                Section("Directory") {
+                    if let currentDirectoryURL {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Current Directory")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Text(currentDirectoryURL.path)
+                                .font(.system(.footnote, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    } else {
+                        Text("No directory selected")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        selectDirectory()
+                    } label: {
+                        Label(
+                            "Select Directory",
+                            systemImage: "folder"
+                        )
                     }
                 }
-                
+
                 Section("Log") {
                     ScrollView {
                         Text(log)
                             .font(.system(.footnote, design: .monospaced))
                             .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .fixedSize(
+                                horizontal: false,
+                                vertical: true
+                            )
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
                     }
-                    .frame(height: 180)
+                    .frame(minHeight: 180)
+
                     Button("Clear") {
-                        log = "it's sandbox time"
+                        log = "file manager ready"
                     }
                 }
             }
             .navigationTitle("bad_query demo")
             .navigationBarTitleDisplayMode(.inline)
-            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.propertyList]) { result in
-                switch result {
-                case .success(let url):
-                    do {
-                        try replace(source: url)
-                    } catch {
-                        log.append("\nreplace failed: \(error)")
-                    }
-                case.failure(let error):
-                    log.append("\nimport failed: \(error)\n")
+            .fileImporter(
+                isPresented: $showingImporter,
+                allowedContentTypes: [
+                    .item,
+                    .folder
+                ],
+                allowsMultipleSelection: false
+            ) { result in
+                handleImportedItem(result)
+            }
+            .confirmationDialog(
+                "Delete Selected Item?",
+                isPresented: $showingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    deleteSelectedItem()
+                }
+
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                if let selectedURL {
+                    Text(selectedURL.path)
                 }
             }
         }
     }
-    
-    func consumeExtension(_ path: String) -> Int64 {
-        if sandboxHandle > 0 {
-            log.append("\nalready consumed sandbox token!")
-            return sandboxHandle
+
+    private func handleImportedItem(
+        _ result: Result<[URL], Error>
+    ) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else {
+                appendLog("\nno item selected")
+                return
+            }
+
+            let accessed = url.startAccessingSecurityScopedResource()
+
+            if !accessed {
+                appendLog(
+                    "\nfailed to obtain security-scoped access"
+                )
+                return
+            }
+
+            selectedURL = url
+
+            if url.hasDirectoryPath {
+                currentDirectoryURL = url
+
+                appendLog(
+                    "\nselected directory:\n\(url.path)"
+                )
+            } else {
+                currentDirectoryURL = url.deletingLastPathComponent()
+
+                appendLog(
+                    "\nselected file:\n\(url.path)"
+                )
+
+                appendLog(
+                    "\ncurrent directory:\n\(currentDirectoryURL?.path ?? "")"
+                )
+            }
+
+        case .failure(let error):
+            appendLog(
+                "\nimport failed: \(error.localizedDescription)"
+            )
         }
-        
-        var pathC = path.utf8CString.map { Int8($0) }
-        
-        log.append("\nattempting consume sandbox extension...")
-        let handle = bad_query(&pathC, false, nil, false)
-        switch handle {
-        case -1:
-            log.append("\nfailed to resolve one or more functions")
-        case -2:
-            log.append("\nfailed to create sandbox query")
-        case -3:
-            log.append("\noutside of containermanager's sandbox")
-        case -4:
-            log.append("\nkernel rejected sandbox query")
-        default:
-            log.append("\nsuccess! handle: \(handle)")
-        }
-        return handle
     }
 
-    func releaseExtension(handle: Int64) {
-        if handle < 0 {
-            log.append("\nsandbox extension hasn't been consumed!")
+    private func selectDirectory() {
+        showingImporter = true
+
+        appendLog(
+            "\nuse Select File or Folder and choose the directory"
+        )
+    }
+
+    private func showCurrentDirectory() {
+        guard let selectedURL else {
+            appendLog("\nno selected item")
             return
         }
-        bad_query_release(handle)
-        log.append("\nreleased sandbox extension!")
-    }
-    
-    func replace(source: URL) throws {
-        log.append("\nattempting replace mobilegestalt cache...")
-        let accessed = source.startAccessingSecurityScopedResource()
-        if !accessed {
-            log.append("\nfailed to access replacement?")
-            throw NSError(domain: "sbhaxx", code: 2)
+
+        let directoryURL: URL
+
+        if selectedURL.hasDirectoryPath {
+            directoryURL = selectedURL
+        } else {
+            directoryURL = selectedURL.deletingLastPathComponent()
         }
-        guard let replacement = try? Data(contentsOf: source) else {
-            log.append("\nfailed to read replacement file data?")
-            throw NSError(domain: "sbhaxx", code: 3)
-        }
-        let path = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist"
-        let url = URL(fileURLWithPath: path)
-        try replacement.write(to: url)
-        log.append("\nwrote replacement successfully, reboot to apply!")
+
+        currentDirectoryURL = directoryURL
+
+        appendLog(
+            "\ncurrent directory:\n\(directoryURL.path)"
+        )
     }
-    
-    func remove() throws {
-        log.append("\nattempting remove mobilegestalt cache...")
+
+    private func copySelectedItemToCurrentDirectory() {
+        guard let sourceURL = selectedURL else {
+            appendLog("\nno source item selected")
+            return
+        }
+
+        guard let destinationDirectory = currentDirectoryURL else {
+            appendLog("\nno destination directory selected")
+            return
+        }
+
+        let accessedSource =
+            sourceURL.startAccessingSecurityScopedResource()
+
+        let accessedDestination =
+            destinationDirectory
+                .startAccessingSecurityScopedResource()
+
+        defer {
+            if accessedSource {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+
+            if accessedDestination {
+                destinationDirectory
+                    .stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let destinationURL =
+            destinationDirectory
+                .appendingPathComponent(sourceURL.lastPathComponent)
+
+        let fileManager = FileManager.default
+
         do {
-            try FileManager.default.removeItem(atPath: "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist")
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(
+                    at: destinationURL
+                )
+
+                appendLog(
+                    "\noverwrote existing item:\n\(destinationURL.path)"
+                )
+            }
+
+            try fileManager.copyItem(
+                at: sourceURL,
+                to: destinationURL
+            )
+
+            appendLog(
+                "\ncopied successfully:\n\(destinationURL.path)"
+            )
         } catch {
-            log.append("\nfailed to remove mobilegestalt cache, error: \(error.localizedDescription)")
-            throw NSError(domain: "sbhaxx", code: 4)
+            appendLog(
+                "\ncopy failed:\n\(error.localizedDescription)"
+            )
         }
-        log.append("\nremoved mobilegestalt cache, reboot to apply!")
+    }
+
+    private func deleteSelectedItem() {
+        guard let selectedURL else {
+            appendLog("\nno item selected")
+            return
+        }
+
+        let accessed =
+            selectedURL.startAccessingSecurityScopedResource()
+
+        defer {
+            if accessed {
+                selectedURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            try FileManager.default.removeItem(
+                at: selectedURL
+            )
+
+            appendLog(
+                "\ndeleted:\n\(selectedURL.path)"
+            )
+
+            let parentDirectory =
+                selectedURL.deletingLastPathComponent()
+
+            selectedURL = parentDirectory
+            currentDirectoryURL = parentDirectory
+        } catch {
+            appendLog(
+                "\ndelete failed:\n\(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func appendLog(_ message: String) {
+        log.append(message)
     }
 }
