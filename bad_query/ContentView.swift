@@ -6,12 +6,17 @@
 //
 
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var sandboxHandle: Int64 = -99
-    @State private var showingImporter = false
+
+    @State private var showingItemImporter = false
+    @State private var showingAddImporter = false
+    @State private var showingDeleteImporter = false
     @State private var showingDeleteConfirmation = false
+    @State private var pendingDeleteURL: URL?
 
     private let defaultPath = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist"
 
@@ -49,12 +54,19 @@ struct ContentView: View {
                     .autocorrectionDisabled()
 
                     Button {
-                        showingImporter = true
+                        showingItemImporter = true
                     } label: {
                         Label(
                             "Select File or Folder",
                             systemImage: "folder.badge.plus"
                         )
+                    }
+                    .fileImporter(
+                        isPresented: $showingItemImporter,
+                        allowedContentTypes: [.item, .folder],
+                        allowsMultipleSelection: false
+                    ) { result in
+                        handleImportedItem(result)
                     }
 
                     Button("Consume Sandbox Extension") {
@@ -106,12 +118,18 @@ struct ContentView: View {
 
                 Section("Export") {
                     if let selectedURL {
-                        ShareLink(item: selectedURL) {
+                        Button {
+                            appendLog(
+                                "\nopening export for:\n\(selectedURL.path)"
+                            )
+                            presentExportSheet(for: selectedURL)
+                        } label: {
                             Label(
                                 "Export At Path",
                                 systemImage: "square.and.arrow.up"
                             )
                         }
+                        .disabled(selectedURL.path.isEmpty)
                     } else {
                         Text("Select an item to export")
                             .foregroundStyle(.secondary)
@@ -120,27 +138,57 @@ struct ContentView: View {
 
                 Section("File Operations") {
                     Button {
-                        copySelectedItemToCurrentDirectory()
+                        showingAddImporter = true
                     } label: {
                         Label(
                             "Add to Current Directory",
                             systemImage: "arrow.down.doc"
                         )
                     }
-                    .disabled(
-                        selectedURL == nil ||
-                        currentDirectoryURL == nil
-                    )
+                    .disabled(currentDirectoryURL == nil)
+                    .fileImporter(
+                        isPresented: $showingAddImporter,
+                        allowedContentTypes: [.item, .folder],
+                        allowsMultipleSelection: false
+                    ) { result in
+                        handleAddImport(result)
+                    }
 
                     Button(role: .destructive) {
-                        showingDeleteConfirmation = true
+                        showingDeleteImporter = true
                     } label: {
                         Label(
                             "Delete Selected Item",
                             systemImage: "trash"
                         )
                     }
-                    .disabled(selectedURL == nil)
+                    .fileImporter(
+                        isPresented: $showingDeleteImporter,
+                        allowedContentTypes: [.item, .folder],
+                        allowsMultipleSelection: false
+                    ) { result in
+                        handleDeleteImport(result)
+                    }
+                    .confirmationDialog(
+                        "Delete Item?",
+                        isPresented: $showingDeleteConfirmation,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Delete", role: .destructive) {
+                            if let url = pendingDeleteURL {
+                                deleteItem(at: url)
+                            }
+                            pendingDeleteURL = nil
+                        }
+
+                        Button("Cancel", role: .cancel) {
+                            pendingDeleteURL = nil
+                        }
+                    } message: {
+                        if let url = pendingDeleteURL {
+                            Text(url.path)
+                        }
+                    }
                 }
 
                 Section("Log") {
@@ -166,31 +214,6 @@ struct ContentView: View {
             }
             .navigationTitle("bad_query demo")
             .navigationBarTitleDisplayMode(.inline)
-            .fileImporter(
-                isPresented: $showingImporter,
-                allowedContentTypes: [
-                    .item,
-                    .folder
-                ],
-                allowsMultipleSelection: false
-            ) { result in
-                handleImportedItem(result)
-            }
-            .confirmationDialog(
-                "Delete Selected Item?",
-                isPresented: $showingDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    deleteSelectedItem()
-                }
-
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                if let selectedURL {
-                    Text(selectedURL.path)
-                }
-            }
         }
     }
 
@@ -229,6 +252,81 @@ struct ContentView: View {
 
         bad_query_release(handle)
         appendLog("\nreleased sandbox extension!")
+    }
+
+    private func presentExportSheet(for url: URL) {
+        guard let presenter = topViewController() else {
+            appendLog(
+                "\ncould not present export (no view controller)"
+            )
+            return
+        }
+
+        let activityVC = UIActivityViewController(
+            activityItems: [url],
+            applicationActivities: nil
+        )
+
+        activityVC.completionWithItemsHandler = {
+            _, completed, _, error in
+            if let error {
+                appendLog(
+                    "\nexport failed: \(error.localizedDescription)"
+                )
+            } else if completed {
+                appendLog("\nexport completed")
+            } else {
+                appendLog("\nexport cancelled")
+            }
+        }
+
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(
+                x: presenter.view.bounds.midX,
+                y: presenter.view.bounds.midY,
+                width: 0,
+                height: 0
+            )
+            popover.permittedArrowDirections = []
+        }
+
+        presenter.present(activityVC, animated: true)
+    }
+
+    private func topViewController() -> UIViewController? {
+        guard
+            let windowScene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }),
+            let rootVC = windowScene.windows
+                .first(where: { $0.isKeyWindow })?
+                .rootViewController
+        else {
+            return nil
+        }
+
+        return topMostViewController(from: rootVC)
+    }
+
+    private func topMostViewController(
+        from viewController: UIViewController
+    ) -> UIViewController {
+        if let presented = viewController.presentedViewController {
+            return topMostViewController(from: presented)
+        }
+
+        if let nav = viewController as? UINavigationController,
+           let top = nav.topViewController {
+            return topMostViewController(from: top)
+        }
+
+        if let tab = viewController as? UITabBarController,
+           let selected = tab.selectedViewController {
+            return topMostViewController(from: selected)
+        }
+
+        return viewController
     }
 
     private func handleImportedItem(
@@ -279,6 +377,42 @@ struct ContentView: View {
         }
     }
 
+    private func handleAddImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else {
+                appendLog("\nno item selected to add")
+                return
+            }
+
+            appendLog("\nadding item:\n\(url.path)")
+            copyItem(url, to: currentDirectoryURL)
+
+        case .failure(let error):
+            appendLog(
+                "\nadd import failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func handleDeleteImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else {
+                appendLog("\nno item selected to delete")
+                return
+            }
+
+            pendingDeleteURL = url
+            showingDeleteConfirmation = true
+
+        case .failure(let error):
+            appendLog(
+                "\ndelete import failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
     private func showCurrentDirectory() {
         guard let url = selectedURL else {
             appendLog("\nno selected item")
@@ -300,13 +434,11 @@ struct ContentView: View {
         )
     }
 
-    private func copySelectedItemToCurrentDirectory() {
-        guard let sourceURL = selectedURL else {
-            appendLog("\nno source item selected")
-            return
-        }
-
-        guard let destinationDirectory = currentDirectoryURL else {
+    private func copyItem(
+        _ sourceURL: URL,
+        to destinationDirectory: URL?
+    ) {
+        guard let destinationDirectory else {
             appendLog("\nno destination directory selected")
             return
         }
@@ -361,12 +493,7 @@ struct ContentView: View {
         }
     }
 
-    private func deleteSelectedItem() {
-        guard let url = selectedURL else {
-            appendLog("\nno item selected")
-            return
-        }
-
+    private func deleteItem(at url: URL) {
         let accessed =
             url.startAccessingSecurityScopedResource()
 
