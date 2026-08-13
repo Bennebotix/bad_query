@@ -285,29 +285,18 @@ struct ContentView: View {
             return
         }
 
-        let item: Any
-        var stagedURL: URL?
-
-        if url.hasDirectoryPath {
-            item = url
-        } else {
-            guard let tempURL = stageFileForExport(url) else {
-                return
-            }
-            stagedURL = tempURL
-            item = tempURL
+        guard let stagedURL = stageForExport(url) else {
+            return
         }
 
         let activityVC = UIActivityViewController(
-            activityItems: [item],
+            activityItems: [stagedURL],
             applicationActivities: nil
         )
 
         activityVC.completionWithItemsHandler = {
             _, completed, _, error in
-            if let stagedURL {
-                try? FileManager.default.removeItem(at: stagedURL)
-            }
+            try? FileManager.default.removeItem(at: stagedURL)
 
             if let error {
                 appendLog(
@@ -334,13 +323,15 @@ struct ContentView: View {
         presenter.present(activityVC, animated: true)
     }
 
-    private func stageFileForExport(_ url: URL) -> URL? {
+    private func stageForExport(_ url: URL) -> URL? {
         guard ensureExtension(for: url.path) else {
             appendLog(
                 "\nexport aborted: no sandbox extension for:\n\(url.path)"
             )
             return nil
         }
+
+        appendLog("\nstaging export for:\n\(url.path)")
 
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -359,12 +350,12 @@ struct ContentView: View {
             try FileManager.default.copyItem(at: url, to: tempURL)
         } catch {
             appendLog(
-                "\nfailed to stage export file:\n\(error.localizedDescription)"
+                "\nfailed to stage export item:\n\(error.localizedDescription)"
             )
             return nil
         }
 
-        appendLog("\nstaged export file:\n\(tempURL.path)")
+        appendLog("\nstaged export item:\n\(tempURL.path)")
         return tempURL
     }
 
